@@ -2980,6 +2980,35 @@ def test_short_runs_read_as_written(runs_fw, read_batching):
 	assert_identical(rebuilt, numpy.nan_to_num(expected[:5]))
 
 
+def test_label_sums_of_sparse_runs(tmp_path):
+	"""Labels summing coverage tracks of runs in one group, most of whose
+	bases are 0 and two of which are 0 throughout, give the sums of the
+	tracks base by base, as the runs of 0 that a sum skips add nothing."""
+
+	tile, length = 1024, 4 * 1024 + 100
+	rng = numpy.random.default_rng(8)
+	values = numpy.zeros((6, length), dtype=numpy.uint32)
+	for row in values[:4]:
+		for k, s in enumerate(rng.integers(0, length - 90, 12).tolist()):
+			row[s:s + 90] += 1 + k % 3
+	path = str(tmp_path / 'coverage.fw')
+	with FigWigWriter(path, {'chr1': length}, [str(i) for i in range(6)],
+			tile=tile, groups=6, n_jobs=1) as writer:
+		writer.write('chr1', [0], values[None])
+	reader = FigWigReader(path)
+	assert 4 in (reader._group_index(0)[0] & 7).tolist()
+
+	# Two windows per chunk, fewer than _SCRATCH_PAIRS, so that each is
+	# summed from the runs rather than from a scratch tile.
+	starts = numpy.arange(0, 4 * tile, tile // 2)
+	windows = numpy.stack([values[:, s:s + tile // 2] for s in starts])
+	for n_jobs in (1, 3):
+		got = reader.read('chr1', starts, tile // 2, labels=[0, 1, 0, 1, 0, 1],
+			dtype='uint32', n_jobs=n_jobs)
+		assert_identical(got, numpy.stack([windows[:, 0::2].sum(axis=1),
+			windows[:, 1::2].sum(axis=1)], axis=1).astype(numpy.uint32))
+
+
 def test_dense_chromosome_is_batched_for_every_thread(tmp_path, monkeypatch):
 	"""A read of a chromosome of dense chunks plans at least as many
 	batches as threads, each chunk in one batch, where one batch of

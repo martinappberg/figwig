@@ -12,6 +12,8 @@ Unreleased
 figwig files
 ------------
 
+	- ``read`` with ``labels`` skips the runs of 0 of a track stored as runs, where it added 0 to each of their bases: a track with no change in a chunk cost every base of the chunk, however few bases of the file are covered. On one thread, a 1 Mb window of a file of 9,160 RNA coverage tracks in one group, as ``figwig bam2fw -c --barcode-column`` writes them, sums into labels in 0.06 s, where it took 8.4 s. The sums are the same to the bit.
+
 	- ``sums`` over a track stored as runs, such as the coverage ``figwig bam2fw -c`` writes, only decodes the changes of value before each interval, adds a run of integers once rather than base by base, and takes the tiles an interval covers whole from the file's tile sums when the track holds integers whose sums those keep exactly. On one thread of the benchmarks' server, the coverage of ENCODE ATAC-seq BAM ENCFF877LRY sums over 78,733 gene bodies in 0.47 s, where it took 7.9 s, and over 100,548 peaks in 0.41 s, where it took 1.6 s; a fold-change track over the gene bodies in 1.55 s, where it took 6.8 s; 48 count tracks over the gene bodies in 6.8 s, where they took 14.4 s. The sums are the same to the bit.
 
 	- ``write_sparse``, and so ``figwig reorder``, stores a tile as a dense or runs chunk when either takes fewer bytes than a sparse one, as ``write`` does. Reordering the ATAC-seq coverage file gives the same 79 MB of runs chunks, where it gave 119 MB of sparse chunks. Scattered entries, such as cells' cut sites, are stored as before: the 10,246-cell PBMC file is the same to the byte.
