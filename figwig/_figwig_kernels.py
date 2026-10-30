@@ -2053,7 +2053,10 @@ def _window_entries(kind, data, at, counts, tracks, ptr, offsets, slots,
 				# row is taken once and each run filled in place. Taking the
 				# row and calling `_put_run` per change cost 70 ns a change
 				# where runs are a base or two long, as conservation scores'
-				# are, against a few ns here.
+				# are, against a few ns here. A sum skips the runs of 0, the
+				# gaps of a sparse track and the whole of a track without a
+				# change in the chunk, which otherwise cost every base of
+				# every track read, however few of their bases are covered.
 				dst = channels[slot]
 				current = 0.0
 				since = base
@@ -2068,8 +2071,9 @@ def _window_entries(kind, data, at, counts, tracks, ptr, offsets, slots,
 						lo = max(since, a) - start
 						hi = here - start
 						if accumulate:
-							for q in range(lo, hi):
-								dst[q] += current
+							if current != 0.0:
+								for q in range(lo, hi):
+									dst[q] += current
 						else:
 							for q in range(lo, hi):
 								dst[q] = current
@@ -2080,8 +2084,9 @@ def _window_entries(kind, data, at, counts, tracks, ptr, offsets, slots,
 					lo = max(since, a) - start
 					hi = b - start
 					if accumulate:
-						for q in range(lo, hi):
-							dst[q] += current
+						if current != 0.0:
+							for q in range(lo, hi):
+								dst[q] += current
 					else:
 						for q in range(lo, hi):
 							dst[q] = current
