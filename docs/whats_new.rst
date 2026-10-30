@@ -60,6 +60,8 @@ Converters and commands
 
 	- ``figwig reorder`` into track order hands the writer each chromosome's entries as already sorted, and the track-order writer sums its blocks' tiles in one pass: the read depth of the HCT116 ATAC-seq BAM reorders in 39 s on one thread, where it took 57 s, at a peak of 7.9 GB, where it took 14.0 GB. The file is the same to the byte.
 
+	- ``figwig bam2fw --barcode-column`` takes ``-c``: each cell's track is the coverage of its intervals, every base of each one cut to its chromosome, as ``figwig bam2bw -c -u`` gives it for the cell's intervals alone, with the cells of a file in one group. Each interval of a BED/tsv file, such as an aligned block of a read with the name of its cell group in the barcode column, then counts once per base, and a file of thousands of coverage tracks is read across its tracks as fast as a file of cells' cut sites, where a track per group, as ``-c`` writes one per BAM file, is read at a cost per group.
+
 Documentation
 -------------
 

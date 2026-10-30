@@ -12,7 +12,8 @@ bigWigs, this writes each file as its own pair of tracks, `<name>.+` and
 holds a whole set of experiments. A metadata table gives the tracks their
 names and attributes. With `--barcode-column`, a fragments file is written
 as one track per cell instead, named by its barcode, the cells listed by
-`--cells` with their attributes or every barcode in the file.
+`--cells` with their attributes or every barcode in the file; with `-c`,
+each cell's track is the coverage of its intervals.
 """
 
 import argparse
@@ -60,8 +61,9 @@ def _parser(prog):
 	parser.add_argument('--barcode-column', default=None, type=int, help="The "
 		"column of a BED/tsv file of fragments that holds the cell barcode, "
 		"counted from 1 (4 in a Cell Ranger fragments file). Each file is then "
-		"written as one track per cell, named by its barcode, in one group. "
-		"Default is to pool a file's fragments into one track per strand.")
+		"written as one track per cell, named by its barcode, in one group; "
+		"with -c, the coverage of each cell's intervals. Default is to pool a "
+		"file's fragments into one track per strand.")
 	parser.add_argument('--cells', default=None, help="With --barcode-column, "
 		"a tab- or comma-separated table with a header whose first column is "
 		"the barcode: only these cells are written, in this order, a 'name' "
@@ -310,9 +312,91 @@ def _check_cell_arguments(args):
 				"not {}.".format(filename))
 	if args.groups is not None and args.groups < 1:
 		raise ValueError("--groups must be at least 1.")
-	if args.coverage:
-		raise ValueError("--barcode-column counts each cell's fragment ends; "
-			"--coverage is not taken with it.")
+
+
+# The bases of a chromosome whose coverage `_write_cell_coverage` hands the
+# writer at once, for every cell: a multiple of every tile, few enough that
+# the entries of thousands of cells fit in memory.
+_CELL_COVERAGE_PIECE = 1 << 20
+
+
+def _read_cell_coverage(filename, args, chrom_sizes, field, barcodes, threads,
+		idx=0, tile=_DEFAULT_TILE):
+	"""Each barcode's coverage of its intervals, for --coverage with
+	--barcode-column: two scans of the file, of the intervals' starts and
+	last bases cut to their chromosomes, as bam2bw's events of each cell,
+	whose runs are returned as `_read_cells` returns counts, with the
+	intervals counted: chromosome name -> (cells, starts, ends, values),
+	ordered by cell and start, and the number of intervals."""
+
+	from ._cells import _read_cells
+	from .bam2bw import _coverage_runs
+
+	firsts, barcodes, missing, dropped, skipped = _read_cells(filename, args,
+		chrom_sizes, field, barcodes, threads, idx, tile, mode=3)
+	lasts = _read_cells(filename, args, chrom_sizes, field, barcodes, threads,
+		idx, tile, mode=4)[0]
+
+	runs, n = {}, 0
+	for chrom, size in chrom_sizes:
+		if chrom not in firsts:
+			continue
+		(starts, start_cells, start_counts), (ends, end_cells, end_counts) = (
+			firsts[chrom], lasts[chrom])
+		n += int(start_counts.sum())
+		# bam2bw's doubled line: a start at 2 * start, an end after the last
+		# base at 2 * (end - 1 + 1) + 1
+		cells = numpy.concatenate([start_cells, end_cells])
+		places = numpy.concatenate([2 * starts, 2 * ends + 3])
+		counts = numpy.concatenate([start_counts, end_counts])
+		if len(cells) == 0:
+			continue
+		order = numpy.lexsort((places, cells))
+		cells, places, counts = cells[order], places[order], counts[order]
+		bounds = numpy.flatnonzero(numpy.diff(cells)) + 1
+		parts = []
+		for lo, hi in zip(numpy.r_[0, bounds], numpy.r_[bounds, len(cells)]):
+			run_starts, run_ends, values, _ = _coverage_runs(places[lo:hi],
+				counts[lo:hi], size)
+			parts.append((numpy.full(len(run_starts), cells[lo]), run_starts,
+				run_ends, values))
+		runs[chrom] = tuple(numpy.concatenate(part) for part in zip(*parts))
+
+	return runs, barcodes, missing, dropped, skipped, n
+
+
+def _write_cell_coverage(writer, runs, offset, chrom_sizes, scale_factor,
+		read_depth):
+	"""Write one file's runs of each cell, from `_read_cell_coverage`, as
+	the entries of every cell in each `_CELL_COVERAGE_PIECE` bases of a
+	chromosome, the cells' tracks starting at track `offset`."""
+
+	piece = _CELL_COVERAGE_PIECE
+	for chrom, _ in chrom_sizes:
+		if chrom not in runs:
+			continue
+		cells, starts, ends, values = runs[chrom]
+		first = starts // piece
+		pieces = (ends - 1) // piece - first + 1
+		k = numpy.repeat(numpy.arange(len(starts)), pieces)
+		ids = first[k] + numpy.arange(len(k)) - numpy.repeat(numpy.cumsum(pieces)
+			- pieces, pieces)
+		starts = numpy.maximum(starts[k], ids * piece)
+		ends = numpy.minimum(ends[k], (ids + 1) * piece)
+		cells, values = cells[k] + offset, values[k].astype(numpy.float64)
+		values *= scale_factor
+		if read_depth is not None:
+			values /= read_depth
+
+		order = numpy.argsort(ids, kind='stable')
+		bounds = numpy.searchsorted(ids[order], numpy.unique(ids))
+		for lo, hi in zip(bounds, numpy.r_[bounds[1:], len(order)]):
+			rows = order[lo:hi]
+			lengths = ends[rows] - starts[rows]
+			positions = numpy.arange(lengths.sum()) + numpy.repeat(starts[rows] -
+				(numpy.cumsum(lengths) - lengths), lengths)
+			writer.write_sparse(chrom, positions, numpy.repeat(cells[rows],
+				lengths), numpy.repeat(values[rows], lengths))
 
 
 def _cell_table(path):
@@ -400,10 +484,17 @@ def _cells_main(args, prog, cores, chrom_sizes):
 	listed = None if cells is None else cells[0]
 	field = args.barcode_column - 1
 	files, barcodes_per_file, dropped = [], [], collections.defaultdict(int)
+	depths = []
 	for idx, filename in enumerate(args.filename):
 		try:
-			counts, barcodes, missing, file_dropped, skipped = _read_cells(filename,
-				args, chrom_sizes, field, listed, cores, idx, args.tile)
+			if args.coverage:
+				counts, barcodes, missing, file_dropped, skipped, depth = (
+					_read_cell_coverage(filename, args, chrom_sizes, field, listed,
+					cores, idx, args.tile))
+			else:
+				counts, barcodes, missing, file_dropped, skipped = _read_cells(
+					filename, args, chrom_sizes, field, listed, cores, idx, args.tile)
+				depth = None
 			if len(barcodes) == 0 and len(missing) > 0:
 				raise ValueError(("no fragment of {} is on a chromosome of {}; the "
 					"file's chromosomes include {}.").format(filename, args.sizes,
@@ -422,6 +513,7 @@ def _cells_main(args, prog, cores, chrom_sizes):
 			dropped[chrom] += count
 		files.append(counts)
 		barcodes_per_file.append(barcodes)
+		depths.append(depth)
 
 	if args.verbose:
 		print("\n" * len(args.filename))
@@ -444,21 +536,28 @@ def _cells_main(args, prog, cores, chrom_sizes):
 				summary_index=args.summary_index) as writer:
 			writer._copies = False
 			offset = 0
-			for counts, barcodes in zip(files, barcodes_per_file):
+			for counts, barcodes, depth in zip(files, barcodes_per_file, depths):
 				# The entries come sorted by tile, cell and offset, which is
 				# the writer's own order when the file's cells are one group,
-				# and finite unless the scale factor is not.
+				# and finite unless the scale factor is not; coverage comes by
+				# cell and position.
 				writer._sorted_entries = len(barcodes) <= (max(_CHUNK_VALUES //
 					args.tile, 1) if args.groups is None else args.groups) and \
-					bool(numpy.isfinite(args.scale_factor))
+					bool(numpy.isfinite(args.scale_factor)) and not args.coverage
 				read_depth = None
 				if args.read_depth:
-					read_depth = sum(int(values.sum()) for _, _, values in
-						counts.values())
+					read_depth = depth if args.coverage else sum(int(values.sum())
+						for _, _, values in counts.values())
 					if args.verbose:
 						print("Dividing {} through by a read depth of {}.".format(
 							tracks[offset]['name'] if len(barcodes) > 0 else '',
 							read_depth))
+
+				if args.coverage:
+					_write_cell_coverage(writer, counts, offset, chrom_sizes,
+						args.scale_factor, read_depth)
+					offset += len(barcodes)
+					continue
 
 				for chrom, _ in chrom_sizes:
 					if chrom not in counts:
