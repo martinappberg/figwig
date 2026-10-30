@@ -21,6 +21,8 @@ Converters and commands
 
 	- ``figwig bam2fw -c`` on threads writes each 4 Mb of a chromosome's coverage as one dense window, whose tiles the writer encodes on its threads, where it encoded every run on the calling thread, unless the 4 Mb hold fewer runs than one per 1,024 bases, as sparse coverage such as RNA-seq's does, which goes in as runs as before: the 2.4 GB ATAC-seq BAM takes 7.2 s on 8 threads, where it took 14.2 s. The file is the same to the byte, and one thread writes it as before.
 
+	- ``figwig bam2fw --barcode-column`` takes ``-c``: each cell's track is the coverage of its intervals, every base of each one cut to its chromosome, as ``figwig bam2bw -c -u`` gives it for the cell's intervals alone, with the cells of a file in one group. Each interval of a BED/tsv file, such as an aligned block of a read with the name of its cell group in the barcode column, then counts once per base, and a file of thousands of coverage tracks is read across its tracks as fast as a file of cells' cut sites, where a track per group, as ``-c`` writes one per BAM file, is read at a cost per group.
+
 Documentation
 -------------
 

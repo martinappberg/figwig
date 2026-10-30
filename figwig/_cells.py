@@ -80,6 +80,9 @@ def _scan_cells(buf, n, i, n_lines, keys, n_keys, table_hash, table_name,
 	mode is 0 to record the start, 1 to record end - 1, and 2 to record both.
 	An end that falls outside its chromosome is counted in dropped[slot]; a
 	fragment of a barcode whose cell number is -1 is counted in skipped[0].
+	Modes 3 and 4 record the start and end - 1 of the interval cut to its
+	chromosome, for --coverage, and count in dropped[slot] an interval with
+	no base inside it.
 	"""
 
 	mask = table_hash.shape[0] - 1
@@ -323,7 +326,18 @@ def _scan_cells(buf, n, i, n_lines, keys, n_keys, table_hash, table_name,
 		low = cell << tile_bits
 		offset_mask = (1 << tile_bits) - 1
 
-		if mode != 1:
+		ends = mode
+		if mode >= 3:
+			if end <= start or end <= 0 or start >= size:
+				dropped[slot] += 1
+				i = next_i
+				n_lines += 1
+				continue
+			start = max(start, 0)
+			end = min(end, size)
+			ends = mode - 3
+
+		if ends != 1:
 			if start < 0 or start >= size:
 				dropped[slot] += 1
 			else:
@@ -331,7 +345,7 @@ def _scan_cells(buf, n, i, n_lines, keys, n_keys, table_hash, table_name,
 					tile_bits)) | low | (start & offset_mask)
 				n_keys += 1
 
-		if mode != 0:
+		if ends != 0:
 			if end - 1 < 0 or end - 1 >= size:
 				dropped[slot] += 1
 			else:
@@ -758,7 +772,7 @@ def _check_bgzf_end(filename):
 
 
 def _read_cells(filename, args, chrom_sizes, field, barcodes, threads, idx=0,
-		tile=16384):
+		tile=16384, mode=None):
 	"""Count each barcode's fragment ends in a fragments file.
 
 	Parameters
@@ -789,6 +803,10 @@ def _read_cells(filename, args, chrom_sizes, field, barcodes, threads, idx=0,
 
 	tile: int
 		The figwig file's tile, a power of two, which orders the entries.
+
+	mode: int or None
+		The scanner's mode, or None for the one `args` gives: both ends
+		with fragments, end - 1 with three_prime, and otherwise the start.
 
 	Returns
 	-------
@@ -830,7 +848,8 @@ def _read_cells(filename, args, chrom_sizes, field, barcodes, threads, idx=0,
 			"with {:,} chromosomes can keep apart.").format(len(barcodes),
 			1 << cell_bits, len(chroms)))
 
-	mode = 2 if args.fragments else (1 if args.three_prime else 0)
+	if mode is None:
+		mode = 2 if args.fragments else (1 if args.three_prime else 0)
 	tile_bits = int(tile).bit_length() - 1
 	state = _CellScan(chroms, sizes, barcodes, field, cell_bits, tile_bits, mode,
 		args, filename)

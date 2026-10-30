@@ -327,7 +327,7 @@ def per_cell_bigwigs(tmp_path_factory, data_dir, sizes):
 
 
 @pytest.mark.parametrize("flags", [("-f",), (), ("-3p",), ("-f", "-ps", "4",
-	"-ns", "-5"), ("-f", "-sf", "0.5")])
+	"-ns", "-5"), ("-f", "-sf", "0.5"), ("-c",), ("-c", "-ps", "3", "-ns", "-2")])
 def test_barcode_column_counts_each_cell(tmp_path, fragments, sizes,
 		per_cell_bigwigs, flags):
 	path = bam2fw(tmp_path, [fragments], sizes, "--barcode-column", "4", *flags)
@@ -910,8 +910,7 @@ def test_coverage_reports_the_bases_clipped_away(tmp_path, coverage_bam, sizes,
 	assert "chr1: 10" in out and "chr2: 10" in out
 
 
-def test_coverage_refuses_what_it_cannot_mean(tmp_path, coverage_bam, fragments,
-		sizes):
+def test_coverage_refuses_what_it_cannot_mean(tmp_path, coverage_bam, sizes):
 	# argparse refuses -c with -f or -3p, with its own message on stderr.
 	with pytest.raises(SystemExit):
 		bam2bw(tmp_path, coverage_bam, sizes, "-c", "-f")
@@ -919,8 +918,6 @@ def test_coverage_refuses_what_it_cannot_mean(tmp_path, coverage_bam, fragments,
 		bam2bw(tmp_path, coverage_bam, sizes, "-c", "-3p")
 	with pytest.raises(ValueError, match="--coverage does not take --mate_pairs"):
 		bam2bw(tmp_path, coverage_bam, sizes, "-c", "-mp")
-	with pytest.raises(SystemExit, match="--coverage is not taken with it"):
-		bam2fw(tmp_path, [fragments], sizes, "--barcode-column", "4", "-c")
 
 
 def test_coverage_counts_aligned_blocks(tmp_path, sizes):
