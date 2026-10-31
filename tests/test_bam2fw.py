@@ -344,6 +344,20 @@ def test_barcode_column_counts_each_cell(tmp_path, fragments, sizes,
 		assert_tracks_match_bigwigs(path, [barcode], [bigwigs[barcode]])
 
 
+def test_barcode_column_coverage_in_pieces(tmp_path, fragments, sizes,
+		per_cell_bigwigs, monkeypatch):
+	"""-c with --barcode-column writes each chromosome a piece at a time:
+	pieces of two tiles, which cut runs, give each cell's coverage."""
+
+	monkeypatch.setattr(figwig.bam2fw, "_CELL_COVERAGE_PIECE", 128)
+	path = bam2fw(tmp_path, [fragments], sizes, "--barcode-column", "4", "-c",
+		"-t", "64")
+	assert FigWigReader(path).tile == 64
+	bigwigs = per_cell_bigwigs(("-c",))
+	for barcode in BARCODES:
+		assert_tracks_match_bigwigs(path, [barcode], [bigwigs[barcode]])
+
+
 def test_barcode_column_read_depth_is_the_files(tmp_path, fragments, sizes):
 	path = bam2fw(tmp_path, [fragments], sizes, "--barcode-column", "4", "-f")
 	scaled = bam2fw(tmp_path / "r", [fragments], sizes, "--barcode-column", "4",
